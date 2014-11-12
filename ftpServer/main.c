@@ -39,7 +39,7 @@ do{ \
 int port = 2100;        //
 int port_port = 12100;
 char ip[] = "127.0.0.1";
-int sockfd,new_fd;
+int sockfd;
 struct sockaddr_in addr,client_addr;
 socklen_t addr_size;
 
@@ -165,6 +165,10 @@ void command_TYPE(struct session_t *session,char *param)
         session->type = 1;
         SendMsg(session->sockfd,"200 TYPE is now 8-bit binary\r\n");
     }
+    else if (param[0]=='A') {
+        session->type = 2;
+        SendMsg(session->sockfd,"200 TYPE is now ASCII binary\r\n");
+    }
     else
         SendMsg(session->sockfd,"504 Unknown TYPE.\r\n");
 }
@@ -261,7 +265,9 @@ void command_PORT(struct session_t *session,char *param)
     inet_pton(AF_INET,buff,&(session->dataaddr.sin_addr));
     session->dataaddr.sin_family = AF_INET;
     session->dataaddr.sin_port = htons(p1*256+p2);
+    session->dataaddr_size = sizeof(session->dataaddr);
     session->state = 2;
+    SendMsg(session->sockfd, "200 OK\r\n");
 }
 
 void command_QUIT(struct session_t *session,char *param)
@@ -365,7 +371,7 @@ void command_STOR(struct session_t *session,char *param)
     send(session->sockfd, buff,strlen(buff),0);
     
     size_t szrd,szwt;
-    while ( (szrd = recv(session->datafd, buff, sizeof(buff),0) ) != -1)
+    while ( (szrd = recv(session->datafd, buff, sizeof(buff),0) ) >0 )
     {
         char * tmp = buff;
         szwt = 0;
@@ -404,11 +410,13 @@ void command_LIST(struct session_t *session,char *param)
     }
     SendMsg(session->sockfd, "150 Opening ASCII mode data connection for '/bin/ls'.\r\n");
     size_t szrd,szwt;
-    while ( (szrd = fread(buff, sizeof(buff), 1, f) ) != EOF)
+    while (!feof(f) )
     {
+        szrd = fread(buff, 1,sizeof(buff), f);
+        if (szrd == 0)
+            szrd = sizeof(buff);
         char * tmp = buff;
         szwt = 0;
-        if (szrd == 0 ) break;
         while(szrd>0 && (szwt = write(session->datafd, buff, szrd)) !=-1)
         {
             tmp += szwt;
@@ -434,8 +442,10 @@ void command_UNKNOWN(struct session_t *session,char *param)
     SendMsg(session->sockfd,"500 Unknown command\r\n");
 }
 
-void ftp(int sock)
+void* thread_ftp(void* arg)
 {
+    int sock = *(int*)arg;
+    free((int*)arg);
     struct session_t session;
     bzero(&session, sizeof(struct session_t));
     session.sockfd = sock;
@@ -528,6 +538,7 @@ void ftp(int sock)
             _command_NotLogin(&session,NULL);
     }
     close(sock);
+    return NULL;
 }
 
 int main(void)
@@ -536,13 +547,17 @@ int main(void)
     addr.sin_port = htons(port);
     addr.sin_family = AF_INET;
     sockfd = socket(PF_INET,SOCK_STREAM,0);
+    
     CHECK(sockfd, "socket failure.");
     CHECKRET(bind(sockfd,(struct sockaddr *) (&addr),sizeof(addr)),"bind");
     CHECKRET(listen(sockfd, 10),"listen");
-
-    while ( (new_fd = accept(sockfd, (struct sockaddr *) &client_addr, &addr_size) )!=-1 || errno == EINTR) {
-        printf("new socket:%d",new_fd );
-        ftp(new_fd);
+    
+    int *new_fd = malloc(sizeof(int));
+    while ( (*new_fd = accept(sockfd, (struct sockaddr *) &client_addr, &addr_size) )!=-1 || errno == EINTR) {
+        pthread_t tid;
+        pthread_create(&tid,NULL,thread_ftp,new_fd);
+        printf("new socket:%d",*new_fd );
+        new_fd = malloc(sizeof(int));
     }
 
     printf("exit %d:%s\n",errno,strerror(errno));

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IDESourceControlProjectFavoriteDictionaryKey</key>
+	<false/>
+	<key>IDESourceControlProjectIdentifier</key>
+	<string>5B5B92DC-A1D1-4C34-B06E-E9B15A6B1EE8</string>
+	<key>IDESourceControlProjectName</key>
+	<string>ftpServer</string>
+	<key>IDESourceControlProjectOriginsDictionary</key>
+	<dict>
+		<key>111194A7BF1BA01343E27863435D90E8DFFFF468</key>
+		<string>https://github.com/yuzeming/ftpserver.git</string>
+	</dict>
+	<key>IDESourceControlProjectPath</key>
+	<string>ftpServer.xcodeproj</string>
+	<key>IDESourceControlProjectRelativeInstallPathDictionary</key>
+	<dict>
+		<key>111194A7BF1BA01343E27863435D90E8DFFFF468</key>
+		<string>../..</string>
+	</dict>
+	<key>IDESourceControlProjectURL</key>
+	<string>https://github.com/yuzeming/ftpserver.git</string>
+	<key>IDESourceControlProjectVersion</key>
+	<integer>111</integer>
+	<key>IDESourceControlProjectWCCIdentifier</key>
+	<string>111194A7BF1BA01343E27863435D90E8DFFFF468</string>
+	<key>IDESourceControlProjectWCConfigurations</key>
+	<array>
+		<dict>
+			<key>IDESourceControlRepositoryExtensionIdentifierKey</key>
+			<string>public.vcs.git</string>
+			<key>IDESourceControlWCCIdentifierKey</key>
+			<string>111194A7BF1BA01343E27863435D90E8DFFFF468</string>
+			<key>IDESourceControlWCCName</key>
+			<string>ftpServer</string>
+		</dict>
+	</array>
+</dict>
+</plist>
