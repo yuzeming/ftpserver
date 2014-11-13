@@ -37,16 +37,19 @@ do{ \
 
 #define SendMsg(fd,str) send(fd,str,strlen(str),0)
 
-int port = 2100;        //
-int port_port = 12100;
-char ip[] = "127.0.0.1";
+//Config
+#define USER_LEN 30
+char _Root[MAXPATHLEN] = "/Users/yzm/Network/ftpRoot";
+char _User[USER_LEN];
+char _Pass[USER_LEN];
+int _Port = 21;
+int _Active_port = 20;
+char _Ip[] = "0.0.0.0";
+
 int sockfd;
 struct sockaddr_in addr,client_addr;
 socklen_t addr_size;
 
-#define USER_LEN 30
-
-char _Root[MAXPATHLEN] = "/Users/yzm/Network/ftpRoot";
 
 struct session_t
 {
@@ -64,6 +67,7 @@ struct session_t
     char pwd[MAXPATHLEN];
     char root[MAXPATHLEN];
     
+    char oldpath[MAXPATHLEN];
 };
 
 char * path_join_jo(char* ret,const char *a,const char *b)
@@ -72,6 +76,8 @@ char * path_join_jo(char* ret,const char *a,const char *b)
     char * tmp = ret;
     
     tmp = stpcpy(tmp, a);
+    if (strstr(a, "..") != NULL)
+        return ret;
     if (la + lb + 2 > MAXPATHLEN)
         return ret;
     if (b[0]=='/')
@@ -144,7 +150,7 @@ void command_PASS(struct session_t *session,char *param)
         send(session->sockfd, buff, strlen(buff),0);
         return ;
     }
-    if (strcmp(session->user,"a")==0&&strcmp(param,"a")==0)
+    if (strcmp(session->user,_User)==0&&strcmp(param,_Pass)==0)
     {
         session->isAuth = 1;
         strcpy(session->root, _Root);
@@ -233,7 +239,7 @@ void command_PASV(struct session_t *session,char *param)
     char buff[BUFSIZ];
     unsigned short pasvport = rand() % 40000 + 20000;
     struct sockaddr_in pasvaddr;
-    socklen_t addr_len;
+    socklen_t addr_len = sizeof(pasvaddr);
     unsigned char* s =(void *) &pasvaddr.sin_addr;
     
     RESET_FD(session);
@@ -303,8 +309,8 @@ int get_data_connect(struct session_t *session)
 {
     int true_val = 1;
     struct sockaddr_in addr;
-    inet_pton(AF_INET,ip,&(addr.sin_addr));
-    addr.sin_port = htons(port_port);
+    inet_pton(AF_INET,_Ip,&(addr.sin_addr));
+    addr.sin_port = htons(_Active_port);
     addr.sin_family = AF_INET;
     if (session->state == 0)
         return -1;
@@ -412,21 +418,7 @@ void command_LIST(struct session_t *session,char *param)
         return ;
     }
     SendMsg(session->sockfd, "150 Opening ASCII mode data connection for '/bin/ls'.\r\n");
-    size_t szrd,szwt;
-    while (!feof(f) )
-    {
-        szrd = fread(buff, 1,sizeof(buff), f);
-        if (szrd == 0)
-            szrd = sizeof(buff);
-        char * tmp = buff;
-        szwt = 0;
-        while(szrd>0 && (szwt = write(session->datafd, buff, szrd)) !=-1)
-        {
-            tmp += szwt;
-            szrd -= szwt;
-        }
-        if (szwt == -1) break;
-    }
+    CopyTo(fileno(f), session->datafd);
     pclose(f);
     shutdown(session->datafd, SHUT_RDWR);
     session->datafd = 0;
@@ -439,6 +431,96 @@ void command_SYST(struct session_t *session,char *param)
 {
     SendMsg(session->sockfd,"215 UNIX Type: L8\r\n");
 }
+
+void command_MKD(struct session_t *session,char *param)
+{
+    char buff[BUFSIZ];
+    char path[MAXPATHLEN];
+    char abspath[MAXPATHLEN];
+    path_join_jo(path, session->pwd, param);
+    path_join(abspath, session->root, path);
+    int ret = mkdir(abspath, S_IRWXU|S_IRWXG|S_IRWXO);
+    if (ret == 0)
+        sprintf(buff, "257 \"%s\" directory created.\r\n",param);
+    else
+        sprintf(buff, "550 %s: %s\r\n",param,strerror(errno));
+    send(session->sockfd, buff, strlen(buff), 0);
+}
+
+void command_RMD(struct session_t *session,char *param)
+{
+    char buff[BUFSIZ];
+    char path[MAXPATHLEN];
+    char abspath[MAXPATHLEN];
+    path_join_jo(path, session->pwd, param);
+    path_join(abspath, session->root, path);
+    int ret = rmdir(abspath);
+    if (ret == 0)
+        sprintf(buff, "250 RMD command successful.\r\n");
+    else
+        sprintf(buff, "550 %s: %s\r\n",param,strerror(errno));
+    send(session->sockfd, buff, strlen(buff), 0);
+}
+
+void command_DELE(struct session_t *session,char *param)
+{
+    char buff[BUFSIZ];
+    char path[MAXPATHLEN];
+    char abspath[MAXPATHLEN];
+    path_join_jo(path, session->pwd, param);
+    path_join(abspath, session->root, path);
+    int ret = unlink(abspath);
+    if (ret == 0)
+        sprintf(buff, "250 DELE command successful.\r\n");
+    else
+        sprintf(buff, "550 %s: %s\r\n",param,strerror(errno));
+    send(session->sockfd, buff, strlen(buff), 0);
+}
+
+void command_RNFR(struct session_t *session,char *param)
+{
+    char buff[BUFSIZ];
+    char path[MAXPATHLEN];
+    char abspath[MAXPATHLEN];
+    struct stat tmpstat;
+    session->oldpath[0]='\0';
+    path_join_jo(path, session->pwd, param);
+    path_join(abspath, session->root, path);
+    int ret = stat(abspath, &tmpstat);
+    if (ret == 0)
+    {
+        sprintf(buff, "350 File exists, ready for destination name\r\n");
+        strcpy(session->oldpath, abspath);
+    }
+    else
+        sprintf(buff, "550 %s: %s\r\n",param,strerror(errno));
+    send(session->sockfd, buff, strlen(buff), 0);
+}
+
+void command_RNTO(struct session_t *session,char *param)
+{
+    char buff[BUFSIZ];
+    char path[MAXPATHLEN];
+    char abspath[MAXPATHLEN];
+
+    path_join_jo(path, session->pwd, param);
+    path_join(abspath, session->root, path);
+    if (session->oldpath[0]=='\0')
+    {
+        SendMsg(session->sockfd, "503 Bad sequence of commands.\r\n");
+        return ;
+    }
+    int ret = rename(session->oldpath,abspath);
+    if (ret == 0)
+    {
+        sprintf(buff, "250 RNTO command successful.\r\n");
+        session->oldpath[0]='\0';
+    }
+    else
+        sprintf(buff, "550 %s: %s\r\n",param,strerror(errno));
+    send(session->sockfd, buff, strlen(buff), 0);
+}
+
 
 void command_UNKNOWN(struct session_t *session,char *param)
 {
@@ -541,6 +623,16 @@ void* thread_ftp(void* arg)
                 command_STOR(&session,param);
             else if (strcmp(verb, "LIST")==0)
                 command_LIST(&session,param);
+            else if (strcmp(verb, "MKD")==0)
+                command_MKD(&session,param);
+            else if (strcmp(verb, "RMD")==0)
+                command_RMD(&session,param);
+            else if (strcmp(verb, "RNFR")==0)
+                command_RNFR(&session,param);
+            else if (strcmp(verb, "RNTO")==0)
+                command_RNTO(&session,param);
+            else if (strcmp(verb, "DELE")==0)
+                command_DELE(&session,param);
             else
                 command_UNKNOWN(&session,NULL);
         }
@@ -551,10 +643,55 @@ void* thread_ftp(void* arg)
     return NULL;
 }
 
-int main(void)
+static struct option longopts[] = {
+    { "dir",       required_argument,      NULL,   'd'},
+    { "user",      required_argument,      NULL,   'u'},
+    { "password",  required_argument,      NULL,   'p'},
+    { "bind",      required_argument,      NULL,   'b'},
+    { "port",      required_argument,      NULL,   1},
+    { "actport",   required_argument,      NULL,   2},
+    { NULL,         0,                     NULL,   0 }
+    
+};
+
+void usage()
 {
-    inet_pton(AF_INET,ip,&(addr.sin_addr));
-    addr.sin_port = htons(port);
+    printf("mei xie.\n");
+}
+
+int main(int argc,char *argv[])
+{
+    int ch;
+    struct sockaddr_in addr;
+    while ( (ch=getopt_long(argc,argv,"d:u:p:b:",longopts,NULL)) != -1)
+        switch (ch) {
+            case 'd':
+                CHECK(strlen(optarg) < MAXPATHLEN,"dir too long.\n");
+                strcpy(_Root,optarg);
+                break;
+            case 'b':
+                strcpy(_Ip, optarg);
+                break;
+            case 'u':
+                CHECK(strlen(optarg) < USER_LEN,"user too long.\n");
+                strcpy(_User,optarg);
+                break;
+            case 'p':
+                CHECK(strlen(optarg) < USER_LEN,"password too long.\n");
+                strcpy(_Pass,optarg);
+                break;
+            case 1:
+                CHECK(sscanf(optarg,"%u",&_Port) ==1 && (_Port >> 16) == 0 ,"bind port invalid.\n");
+                break;
+            case 2:
+                CHECK(sscanf(optarg,"%u",&_Active_port) ==1 && (_Active_port >> 16) == 0 ,"active bind port invalid.\n");
+                break;
+            default:
+                usage();
+                exit(0);
+        }
+    inet_pton(AF_INET,_Ip,&(addr.sin_addr));
+    addr.sin_port = htons(_Port);
     addr.sin_family = AF_INET;
     sockfd = socket(PF_INET,SOCK_STREAM,0);
     
