@@ -1,6 +1,6 @@
 //
 //  main.c
-//  ftpServer
+//  Wind Ftp Server
 //
 //  Created by 俞则明 on 14/11/10.
 //  Copyright (c) 2014年 ZemingYU. All rights reserved.
@@ -21,6 +21,7 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 #define CHECK(b,s) CHECK_LINE_FILE_(b,s,__LINE__,__FILE__)
 #define CHECKRET(b,s)CHECK_LINE_FILE_( (b) == 0,s,__LINE__,__FILE__)
@@ -127,6 +128,7 @@ void command_USER(struct session_t *session,char *param)
 {
     char buff[BUFSIZ];
     strncpy(session->user, param, USER_LEN);
+    session->isAuth = 0;
     if (strlen(session->user)==0)
         strcpy(session->user,"anonymous");
     sprintf(buff, "331 User %s OK. Password required\r\n",session->user);
@@ -156,7 +158,7 @@ void command_PASS(struct session_t *session,char *param)
 
 void _command_Welcome(struct session_t *session,char *param)
 {
-    SendMsg(session->sockfd,"220-Welcome My Ftp Server\r\n220 By-StarQoQ\r\n");
+    SendMsg(session->sockfd,"220-Welcome Wind Ftp Server\r\n220 By-StarQoQ\r\n");
 }
 
 void command_TYPE(struct session_t *session,char *param)
@@ -231,12 +233,12 @@ void command_PASV(struct session_t *session,char *param)
     char buff[BUFSIZ];
     unsigned short pasvport = rand() % 40000 + 20000;
     struct sockaddr_in pasvaddr;
+    socklen_t addr_len;
     unsigned char* s =(void *) &pasvaddr.sin_addr;
     
     RESET_FD(session);
     
-    inet_pton(AF_INET,ip,&(pasvaddr.sin_addr));
-    pasvaddr.sin_family = AF_INET;
+    getsockname(session->sockfd, (struct sockaddr*)&pasvaddr, &addr_len);
     pasvaddr.sin_port = htons(pasvport);
     
     session->state = 1;
@@ -248,8 +250,6 @@ void command_PASV(struct session_t *session,char *param)
         pasvaddr.sin_port = htons(pasvport);
     }
     
-
-    
     listen(session->pasvfd, 10);
     
     sprintf(buff,"227 Entering Passive Mode (%hhu,%hhu,%hhu,%hhu,%d,%d)\r\n",s[0],s[1],s[2],s[3],pasvport/256,pasvport%256);
@@ -260,8 +260,12 @@ void command_PORT(struct session_t *session,char *param)
 {
     char buff[BUFSIZ];
     int h1,h2,h3,h4,p1,p2;
+    
     sscanf(param,"%d,%d,%d,%d,%d,%d",&h1,&h2,&h3,&h4,&p1,&p2);
     sprintf(buff, "%d.%d.%d.%d",h1,h2,h3,h4);
+    
+    RESET_FD(session);
+    
     inet_pton(AF_INET,buff,&(session->dataaddr.sin_addr));
     session->dataaddr.sin_family = AF_INET;
     session->dataaddr.sin_port = htons(p1*256+p2);
@@ -274,6 +278,25 @@ void command_QUIT(struct session_t *session,char *param)
 {
     session->state = -1;
     SendMsg(session->sockfd, "221 Goodbye.\r\n");
+}
+
+size_t CopyTo(int src_fd,int dst_fd)
+{
+    char buff[BUFSIZ];
+    size_t szrd,szwt,tot=0;
+    while ( (szrd = read(src_fd, buff, sizeof(buff)) )>0)
+    {
+        char * tmp = buff;
+        szwt=0;
+        while(szrd >0 && (szwt = write(dst_fd, buff, szrd)) !=-1)
+        {
+            tmp += szwt;
+            szrd -= szwt;
+            tot += szwt;
+        }
+        if (szwt == -1) break;
+    }
+    return tot;
 }
 
 int get_data_connect(struct session_t *session)
@@ -325,19 +348,9 @@ void command_RETR(struct session_t *session,char *param)
     
     sprintf(buff, "150 Opening BINARY mode data connection for '%s'. (%zu bytes)\r\n",param,get_file_size(abspath));
     send(session->sockfd, buff,strlen(buff),0);
-
-    size_t szrd,szwt;
-    while ( (szrd = read(fd, buff, sizeof(buff)) )>0)
-    {
-        char * tmp = buff;
-        szwt=0;
-        while(szrd >0 && (szwt = write(session->datafd, buff, szrd)) !=-1)
-        {
-            tmp += szwt;
-            szrd -= szwt;
-        }
-        if (szwt == -1) break;
-    }
+    
+    CopyTo(fd, session->datafd);
+    
     close(fd);
     shutdown(session->datafd, SHUT_RDWR);
     session->datafd = 0;
@@ -370,18 +383,8 @@ void command_STOR(struct session_t *session,char *param)
     sprintf(buff, "150 Opening BINARY mode data connection for '%s'.\r\n",param);
     send(session->sockfd, buff,strlen(buff),0);
     
-    size_t szrd,szwt;
-    while ( (szrd = recv(session->datafd, buff, sizeof(buff),0) ) >0 )
-    {
-        char * tmp = buff;
-        szwt = 0;
-        while(szrd>0 && (szwt = write(fd, buff, szrd)) !=-1)
-        {
-            tmp += szwt;
-            szrd -= szwt;
-        }
-        if (szwt == -1) break;
-    }
+    CopyTo(session->datafd,fd);
+    
     close(fd);
     shutdown(session->datafd, SHUT_RDWR);
     session->datafd = 0;
@@ -442,64 +445,71 @@ void command_UNKNOWN(struct session_t *session,char *param)
     SendMsg(session->sockfd,"500 Unknown command\r\n");
 }
 
+int telnet_get_verb_parm(int sock,char *verb,char *param)
+{
+    int code;
+    size_t len = 0;
+    char buff[BUFSIZ];
+    verb[0]=param[0]='\0';
+    while (len < BUFSIZ && (buff[len-2]!='\r' || buff[len-1] != '\n'))
+    {
+        size_t sz;
+        while ( (sz = recv(sock,buff+len,1,0)) !=1 )
+            if (sz == -1)
+                return -1;
+
+        if (buff[len]=='\\')
+        {
+            recv(sock,buff+len,3,0);
+            buff[len+3]='\0';
+            sscanf(buff+len,"%d",&code);
+            if (code!=377)
+            {
+                buff[len] = (unsigned char)code;
+                ++len;
+            }
+        }
+        else
+            ++len;
+    }
+
+    len -=2;
+    buff[len] = '\0';
+    printf("buff:%s\n",buff);
+    char *spit = strchr(buff, ' ');
+    
+    if (spit == NULL)
+        strcpy(verb, buff);
+    else
+    {
+        strncpy(verb, buff,spit - buff);
+        verb[spit - buff]='\0';
+        while (*spit ==' ')
+            ++spit;
+        strcpy(param, spit);
+    }
+    return 0;
+}
+
 void* thread_ftp(void* arg)
 {
     int sock = *(int*)arg;
     free((int*)arg);
+
     struct session_t session;
     bzero(&session, sizeof(struct session_t));
     session.sockfd = sock;
-    char buff[BUFSIZ];
+
     char param[BUFSIZ],verb[BUFSIZ];
-    int code;
     
     _command_Welcome(&session,NULL);
     
     while (session.state>=0)
     {
         param[0]=verb[0]='\0';
-        size_t len = 0;
-        while (len < BUFSIZ && (buff[len-2]!='\r' || buff[len-1] != '\n'))
-        {
-            size_t sz;
-            while ( (sz = recv(sock,buff+len,1,0)) !=1 )
-                if (sz == -1)
-                {
-                    session.state = -1;
-                    break;
-                }
-            
-            if (buff[len]=='\\')
-            {
-                recv(sock,buff+len,3,0);
-                buff[len+3]='\0';
-                sscanf(buff+len,"%d",&code);
-                if (code!=377)
-                {
-                    buff[len] = (unsigned char)code;
-                    ++len;
-                }
-            }
-            else
-                ++len;
-        }
-    
-        len -=2;
-        buff[len] = '\0';
-        printf("buff:%s\n",buff);
-        char *spit = strchr(buff, ' ');
         
-        if (spit == NULL)
-            strcpy(verb, buff);
-        else
-        {
-            strncpy(verb, buff,spit - buff);
-            verb[spit - buff]='\0';
-            while (*spit ==' ')
-                ++spit;
-            strcpy(param, spit);
-        }
-
+        if (telnet_get_verb_parm(sock,verb,param) == -1)
+            break;
         printf("V:%s P:%s\n",verb,param);
         
         if (strcmp(verb, "USER")==0)
