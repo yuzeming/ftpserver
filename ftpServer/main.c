@@ -37,10 +37,12 @@ do{ \
 
 #define SendMsg(fd,str) send(fd,str,strlen(str),0)
 
+#define anonymous_USER "anonymous"
+
 //Config
 #define USER_LEN 30
-char _Root[MAXPATHLEN] = "/Users/yzm/Network/ftpRoot";
-char _User[USER_LEN];
+char _Root[MAXPATHLEN] = "/tmp";
+char _User[USER_LEN]=anonymous_USER;
 char _Pass[USER_LEN];
 int _Port = 21;
 int _Active_port = 20;
@@ -75,11 +77,12 @@ char * path_join_jo(char* ret,const char *a,const char *b)
     size_t la = strlen(a),lb = strlen(b);
     char * tmp = ret;
     
+    ret[0]='\0';
+    if (strstr(a, "..") != NULL||strstr(b, "..") != NULL||la + lb + 2 > MAXPATHLEN)
+        return ret;
+    
     tmp = stpcpy(tmp, a);
-    if (strstr(a, "..") != NULL)
-        return ret;
-    if (la + lb + 2 > MAXPATHLEN)
-        return ret;
+
     if (b[0]=='/')
         strcpy(ret, b);
     else
@@ -95,9 +98,12 @@ char * path_join(char* ret,const char *a,const char *b)
 {
     size_t la = strlen(a),lb = strlen(b);
     char * tmp = ret;
-    tmp = stpcpy(tmp, a);
-    if (la + lb + 2 > MAXPATHLEN)
+    
+    ret[0]='\0';
+    if (strstr(a, "..") != NULL||strstr(b, "..") != NULL||la + lb + 2 > MAXPATHLEN)
         return ret;
+    
+    tmp = stpcpy(tmp, a);
 
     if (a[la-1]!='/'&&b[0]!='/')
         tmp = stpcpy(tmp, "/");
@@ -150,7 +156,8 @@ void command_PASS(struct session_t *session,char *param)
         send(session->sockfd, buff, strlen(buff),0);
         return ;
     }
-    if (strcmp(session->user,_User)==0&&strcmp(param,_Pass)==0)
+    if (strcmp(session->user,_User)==0&&
+        (strcmp(session->user,anonymous_USER)==0||strcmp(param,_Pass)==0))
     {
         session->isAuth = 1;
         strcpy(session->root, _Root);
@@ -216,7 +223,7 @@ void command_PWD(struct session_t *session,char *param)
 
 void _command_NotLogin(struct session_t *session,char *param)
 {
-    SendMsg(session->sockfd,"530 You aren't logged in;\r\n");
+    SendMsg(session->sockfd,"530 You aren't logged in.\r\n");
 }
 
 void command_CDUP(struct session_t *session,char *param)
@@ -277,7 +284,7 @@ void command_PORT(struct session_t *session,char *param)
     session->dataaddr.sin_port = htons(p1*256+p2);
     session->dataaddr_size = sizeof(session->dataaddr);
     session->state = 2;
-    SendMsg(session->sockfd, "200 OK\r\n");
+    SendMsg(session->sockfd, "200 PORT command successful.\r\n");
 }
 
 void command_QUIT(struct session_t *session,char *param)
@@ -394,7 +401,7 @@ void command_STOR(struct session_t *session,char *param)
     close(fd);
     shutdown(session->datafd, SHUT_RDWR);
     session->datafd = 0;
-    
+    chmod(abspath, S_IRWXU|S_IRWXG|S_IRWXO);
     SendMsg(session->sockfd,"226 Transfer complete.\r\n");
 
 }
@@ -598,7 +605,7 @@ void* thread_ftp(void* arg)
             command_USER(&session,param);
         else if (strcmp(verb, "PASS")==0)
             command_PASS(&session,param);
-        else if (strcmp(verb, "QUIT")==0)
+        else if (strcmp(verb, "QUIT")==0||strcmp(verb, "ABOR")==0)
             command_QUIT(&session,NULL);
         else if (strcmp(verb,"SYST") == 0)
             command_SYST(&session,NULL);
@@ -623,9 +630,9 @@ void* thread_ftp(void* arg)
                 command_STOR(&session,param);
             else if (strcmp(verb, "LIST")==0)
                 command_LIST(&session,param);
-            else if (strcmp(verb, "MKD")==0)
+            else if (strcmp(verb, "MKD")==0||strcmp(verb, "XMKD")==0)
                 command_MKD(&session,param);
-            else if (strcmp(verb, "RMD")==0)
+            else if (strcmp(verb, "RMD")==0||strcmp(verb, "XRMD")==0)
                 command_RMD(&session,param);
             else if (strcmp(verb, "RNFR")==0)
                 command_RNFR(&session,param);
@@ -694,6 +701,10 @@ int main(int argc,char *argv[])
     addr.sin_port = htons(_Port);
     addr.sin_family = AF_INET;
     sockfd = socket(PF_INET,SOCK_STREAM,0);
+    
+    printf("Start Ftp Server At %s : %u\n",_Ip,_Port);
+    printf("user:%s password:%s\n",_User,_Pass);
+    printf("workdir:%s\n",_Root);
     
     CHECK(sockfd, "socket failure.");
     CHECKRET(bind(sockfd,(struct sockaddr *) (&addr),sizeof(addr)),"bind");
