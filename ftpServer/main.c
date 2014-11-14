@@ -355,7 +355,7 @@ void command_RETR(struct session_t *session,char *param)
     }
     if (get_data_connect(session) == -1)
     {
-        SendMsg(session->sockfd,"425 Can't build data connection ");
+        SendMsg(session->sockfd,"425 Can't build data connection\r\n");
         return ;
     }
     
@@ -389,7 +389,7 @@ void command_STOR(struct session_t *session,char *param)
     }
     if (get_data_connect(session) == -1)
     {
-        SendMsg(session->sockfd,"425 Can't build data connection ");
+        SendMsg(session->sockfd,"425 Can't build data connection\r\n");
         return ;
     }
     
@@ -564,7 +564,7 @@ int telnet_get_verb_parm(int sock,char *verb,char *param)
 
     len -=2;
     buff[len] = '\0';
-    printf("buff:%s\n",buff);
+    //printf("buff:%s\n",buff);
     char *spit = strchr(buff, ' ');
     
     if (spit == NULL)
@@ -599,7 +599,7 @@ void* thread_ftp(void* arg)
         
         if (telnet_get_verb_parm(sock,verb,param) == -1)
             break;
-        printf("V:%s P:%s\n",verb,param);
+        //printf("V:%s P:%s\n",verb,param);
         
         if (strcmp(verb, "USER")==0)
             command_USER(&session,param);
@@ -714,7 +714,7 @@ int main(int argc,char *argv[])
     while ( (*new_fd = accept(sockfd, (struct sockaddr *) &client_addr, &addr_size) )!=-1 || errno == EINTR) {
         pthread_t tid;
         pthread_create(&tid,NULL,thread_ftp,new_fd);
-        printf("new socket:%d",*new_fd );
+        //printf("new socket:%d",*new_fd );
         new_fd = malloc(sizeof(int));
     }
 
